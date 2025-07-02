@@ -158,7 +158,7 @@ namespace EternalModLoader
             {
                 fileStream.Position = 0x20;
                 int fileCount = binaryReader.ReadInt32();
-                int unknownCount = binaryReader.ReadInt32();
+                int dependencyCount = binaryReader.ReadInt32();
                 int dummy2Num = binaryReader.ReadInt32(); // Number of TypeIds
                 int pathStringCount = binaryReader.ReadInt32();
                 fileStream.Read(FileBuffer, 0, 8);
@@ -167,11 +167,16 @@ namespace EternalModLoader
                 long namesOffset = binaryReader.ReadInt64();
                 long namesEnd = binaryReader.ReadInt64();
                 long infoOffset = binaryReader.ReadInt64();
-                fileStream.Read(FileBuffer, 0, 8);
+                long dependenciesOffset = binaryReader.ReadInt64();
                 long dummy7OffOrg = binaryReader.ReadInt64(); // Offset of TypeIds, needs addition to get offset of nameIds
                 long dataOff = binaryReader.ReadInt64();
-                fileStream.Read(FileBuffer, 0, 4);
-                long idclOff = binaryReader.ReadInt64();
+
+                // These two variables were cut from DA resource headers
+                // We must get the location of this differently
+                //fileStream.Read(FileBuffer, 0, 4);
+                //long idclOff = binaryReader.ReadInt64();
+                // 32 = sizeof(ResourceDependency) , 4 = sizeof(int32); 8 = sizeof(int64)
+                long idclOff = dependenciesOffset + dependencyCount * 32 + dummy2Num * 4 + pathStringCount * 8;
 
                 // Read all the file names now
                 fileStream.Position = namesOffset;
@@ -242,7 +247,7 @@ namespace EternalModLoader
                 resourceContainer.Dummy7Offset = dummy7OffOrg;
                 resourceContainer.DataOffset = dataOff;
                 resourceContainer.IdclOffset = idclOff;
-                resourceContainer.UnknownCount = unknownCount;
+                resourceContainer.DependencyCount = dependencyCount;
                 resourceContainer.FileCount2 = fileCount * 2;
                 resourceContainer.NamesOffsetEnd = namesOffsetEnd;
                 resourceContainer.UnknownOffset = namesEnd;
@@ -1834,7 +1839,7 @@ namespace EternalModLoader
             Buffer.BlockCopy(FastBitConverter.GetBytes(resourceContainer.UnknownOffset2 + unknownAdd), 0, header, 0x58, 8);
             Buffer.BlockCopy(FastBitConverter.GetBytes(resourceContainer.Dummy7Offset + typeIdsAdd), 0, header, 0x60, 8);
             Buffer.BlockCopy(FastBitConverter.GetBytes(resourceContainer.DataOffset + dataAdd), 0, header, 0x68, 8);
-            Buffer.BlockCopy(FastBitConverter.GetBytes(resourceContainer.IdclOffset + idclAdd), 0, header, 0x74, 8);
+            //Buffer.BlockCopy(FastBitConverter.GetBytes(resourceContainer.IdclOffset + idclAdd), 0, header, 0x74, 8);
 
             byte[] newOffsetBuffer = new byte[8];
 
@@ -2781,22 +2786,25 @@ namespace EternalModLoader
             BufferedConsole.Flush();
 
             // Initialize the multiplayer disabler mod
-            OnlineSafety.InitMultiplayerDisablerMod();
-
+            //OnlineSafety.InitMultiplayerDisablerMod();
             // Also redirect internal blang modifications if needed
-            if (!string.IsNullOrEmpty(BlangFileContainerRedirect))
-            {
-                foreach (var modFile in OnlineSafety.MultiplayerDisablerMod)
-                {
-                    if (modFile.Name.StartsWith($"EternalMod/strings/", StringComparison.Ordinal))
-                    {
-                        modFile.ResourceName = BlangFileContainerRedirect;
-                    }
-                }
-            }
+            //if (!string.IsNullOrEmpty(BlangFileContainerRedirect))
+            //{
+            //    foreach (var modFile in OnlineSafety.MultiplayerDisablerMod)
+            //    {
+            //        if (modFile.Name.StartsWith($"EternalMod/strings/", StringComparison.Ordinal))
+            //        {
+            //            modFile.ResourceName = BlangFileContainerRedirect;
+            //        }
+            //    }
+            //}
 
             // Read all the necessary game file paths
             FillContainerPathList();
+            if(!ArchiveResolution.InitArchiveResolution())
+            {
+                BufferedConsole.WriteLine("Failed to read Archive Resolution Map!");
+            }
 
             // Find and read zipped mods
             var fileLoadBufferedConsole = new BufferedConsole();
@@ -2869,6 +2877,7 @@ namespace EternalModLoader
                             // Determine the game container for each mod file
                             bool isSoundMod = false;
                             bool isStreamDBMod = false;
+                            bool isAutoMod = false;
                             string modFileName = zipEntry.Name;
                             var firstForwardSlash = modFileName.IndexOf('/');
 
@@ -2887,16 +2896,8 @@ namespace EternalModLoader
 
                             string resourceName = modFileName.Substring(0, firstForwardSlash);
 
-                            // Old mods compatibility
-                            if (resourceName == "generated")
-                            {
-                                resourceName = "gameresources";
-                            }
-                            else
-                            {
-                                // Remove the resource name from the name
-                                modFileName = modFileName.Substring(firstForwardSlash + 1);
-                            }
+                            // Remove the resource name from the name
+                            modFileName = modFileName.Substring(firstForwardSlash + 1);
 
                             // Get path to resource file
                             var resourcePath = PathToResource($"{resourceName}.resources");
@@ -2916,6 +2917,10 @@ namespace EternalModLoader
                                 if (resourcePath != null)
                                 {
                                     isSoundMod = true;
+                                }
+                                else if(resourceName == "auto")
+                                {
+                                    isAutoMod = true;
                                 }
                                 else
                                 {
@@ -3005,95 +3010,104 @@ namespace EternalModLoader
                             {
                                 lock (ResourceList)
                                 {
-                                    // Get the resource object
-                                    var resource = ResourceList.FirstOrDefault(res => res.Name == resourceName);
 
-                                    if (resource == null)
+                                    string[] archiveList = isAutoMod ? ArchiveResolution.GetArchiveNames(modFileName) : new string[] { resourceName };
+                                    // Should print warning if archivelist is empty
+                                    foreach(string currentArchive in archiveList)
                                     {
-                                        resource = new ResourceContainer(resourceName, PathToResource(resourceName + ".resources"));
-                                        ResourceList.Add(resource);
-                                    }
+                                        BufferedConsole.WriteLine("Are we even here????");
+                                        // Get the resource object
+                                        var resource = ResourceList.FirstOrDefault(res => res.Name == currentArchive);
 
-                                    // Create the mod object and read the unzipped files
-                                    ResourceModFile resourceModFile = new ResourceModFile(mod, modFileName, resourceName);
-                                    mod.Files.Add(resourceModFile);
-
-                                    if (!listResources)
-                                    {
-                                        resourceModFile.FileData = new MemoryStream((int)zipEntry.UncompressedLength);
-                                        zipReader.ReadCurrentEntry(resourceModFile.FileData);
-                                    }
-
-                                    // Read the JSON files in 'assetsinfo' under 'EternalMod'
-                                    if (modFileName.EndsWith(".json", StringComparison.Ordinal))
-                                    {
-                                        if (modFileName.StartsWith($"EternalMod/assetsinfo/", StringComparison.Ordinal))
+                                        if (resource == null)
                                         {
-                                            try
-                                            {
-                                                // If we are just listing resources, read this JSON file only
-                                                if (listResources)
-                                                {
-                                                    resourceModFile.FileData = new MemoryStream((int)zipEntry.UncompressedLength);
-                                                    zipReader.ReadCurrentEntry(resourceModFile.FileData);
-                                                }
+                                            resource = new ResourceContainer(currentArchive, PathToResource(currentArchive + ".resources"));
+                                            ResourceList.Add(resource);
+                                        }
 
-                                                resourceModFile.AssetsInfo = AssetsInfo.FromJson(Encoding.UTF8.GetString(resourceModFile.FileData.GetBuffer()));
-                                                resourceModFile.IsAssetsInfoJson = true;
-                                                resourceModFile.FileData = null;
+                                        // Create the mod object and read the unzipped files
+                                        ResourceModFile resourceModFile = new ResourceModFile(mod, modFileName, currentArchive);
+                                        mod.Files.Add(resourceModFile);
+
+                                        if (!listResources)
+                                        {
+                                            resourceModFile.FileData = new MemoryStream((int)zipEntry.UncompressedLength);
+                                            zipReader.ReadCurrentEntry(resourceModFile.FileData);
+                                        }
+
+                                        // Read the JSON files in 'assetsinfo' under 'EternalMod'
+                                        if (modFileName.EndsWith(".json", StringComparison.Ordinal))
+                                        {
+                                            if (modFileName.StartsWith($"EternalMod/assetsinfo/", StringComparison.Ordinal))
+                                            {
+                                                try
+                                                {
+                                                    // If we are just listing resources, read this JSON file only
+                                                    if (listResources)
+                                                    {
+                                                        resourceModFile.FileData = new MemoryStream((int)zipEntry.UncompressedLength);
+                                                        zipReader.ReadCurrentEntry(resourceModFile.FileData);
+                                                    }
+
+                                                    resourceModFile.AssetsInfo = AssetsInfo.FromJson(Encoding.UTF8.GetString(resourceModFile.FileData.GetBuffer()));
+                                                    resourceModFile.IsAssetsInfoJson = true;
+                                                    resourceModFile.FileData = null;
+                                                }
+                                                catch
+                                                {
+                                                    if (!listResources)
+                                                    {
+                                                        fileLoadBufferedConsole.ForegroundColor = BufferedConsole.ForegroundColorCode.Red;
+                                                        fileLoadBufferedConsole.Write("ERROR: ");
+                                                        fileLoadBufferedConsole.ResetColor();
+                                                        fileLoadBufferedConsole.WriteLine($"Failed to parse EternalMod/assetsinfo/{Path.GetFileNameWithoutExtension(resourceModFile.Name)}.json");
+                                                    }
+
+                                                    continue;
+                                                }
                                             }
-                                            catch
+                                            else if (modFileName.StartsWith($"EternalMod/strings/", StringComparison.Ordinal))
                                             {
-                                                if (!listResources)
-                                                {
-                                                    fileLoadBufferedConsole.ForegroundColor = BufferedConsole.ForegroundColorCode.Red;
-                                                    fileLoadBufferedConsole.Write("ERROR: ");
-                                                    fileLoadBufferedConsole.ResetColor();
-                                                    fileLoadBufferedConsole.WriteLine($"Failed to parse EternalMod/assetsinfo/{Path.GetFileNameWithoutExtension(resourceModFile.Name)}.json");
-                                                }
-
+                                                // Detect custom localization files
+                                                resourceModFile.IsBlangJson = true;
+                                            }
+                                            else
+                                            {
                                                 continue;
                                             }
                                         }
-                                        else if (modFileName.StartsWith($"EternalMod/strings/", StringComparison.Ordinal))
-                                        {
-                                            // Detect custom localization files
-                                            resourceModFile.IsBlangJson = true;
-                                        }
-                                        else
-                                        {
-                                            continue;
-                                        }
+
+                                        resource.ModFileList.Add(resourceModFile);
+                                        zippedModCount++;
                                     }
 
-                                    resource.ModFileList.Add(resourceModFile);
-                                    zippedModCount++;
+
                                 }
                             }
                         }
                     }
 
                     // Check if the mod is safe for online play
-                    if (!OnlineSafety.IsModSafeForOnline(mod))
-                    {
-                        AreModsSafeForOnline = false;
-                        mod.IsSafeForOnline = false;
+                    //if (!OnlineSafety.IsModSafeForOnline(mod))
+                    //{
+                    //    AreModsSafeForOnline = false;
+                    //    mod.IsSafeForOnline = false;
 
-                        // Unload the mod files if necessary
-                        if (LoadOnlineSafeOnlyMods)
-                        {
-                            lock (ResourceList)
-                            {
-                                foreach (var resource in ResourceList)
-                                {
-                                    foreach (ResourceModFile modFile in mod.Files.Where(file => file is ResourceModFile))
-                                    {
-                                        resource.ModFileList.Remove(modFile);
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    //    // Unload the mod files if necessary
+                    //    if (LoadOnlineSafeOnlyMods)
+                    //    {
+                    //        lock (ResourceList)
+                    //        {
+                    //            foreach (var resource in ResourceList)
+                    //            {
+                    //                foreach (ResourceModFile modFile in mod.Files.Where(file => file is ResourceModFile))
+                    //                {
+                    //                    resource.ModFileList.Remove(modFile);
+                    //                }
+                    //            }
+                    //        }
+                    //    }
+                    //}
 
                     totalZippedModCount += zippedModCount;
 
@@ -3113,12 +3127,12 @@ namespace EternalModLoader
                                 fileLoadBufferedConsole.ResetColor();
                                 fileLoadBufferedConsole.WriteLine();
 
-                                if (!mod.IsSafeForOnline)
-                                {
-                                    fileLoadBufferedConsole.ForegroundColor = BufferedConsole.ForegroundColorCode.Yellow;
-                                    fileLoadBufferedConsole.WriteLine($"WARNING: Mod \"{zippedMod}\" is not safe for online play, public matchmaking will be disabled");
-                                    fileLoadBufferedConsole.ResetColor();
-                                }
+                                //if (!mod.IsSafeForOnline)
+                                //{
+                                //    fileLoadBufferedConsole.ForegroundColor = BufferedConsole.ForegroundColorCode.Yellow;
+                                //    fileLoadBufferedConsole.WriteLine($"WARNING: Mod \"{zippedMod}\" is not safe for online play, public matchmaking will be disabled");
+                                //    fileLoadBufferedConsole.ResetColor();
+                                //}
                             }
                             else
                             {
@@ -3188,6 +3202,7 @@ namespace EternalModLoader
                     // Determine the game container for each mod file
                     bool isSoundMod = false;
                     bool isStreamDBMod = false;
+                    bool isAutoMod = false;
                     var firstForwardSlash = modFileName.IndexOf('/');
 
                     if (firstForwardSlash == -1)
@@ -3205,16 +3220,8 @@ namespace EternalModLoader
 
                     string resourceName = modFileName.Substring(0, firstForwardSlash);
 
-                    // Old mods compatibility
-                    if (resourceName == "generated")
-                    {
-                        resourceName = "gameresources";
-                    }
-                    else
-                    {
-                        // Remove the resource name from the path
-                        modFileName = modFileName.Substring(firstForwardSlash + 1);
-                    }
+                    // Remove the resource name from the path
+                    modFileName = modFileName.Substring(firstForwardSlash + 1);
 
                     // Get path to resource file
                     var resourcePath = PathToResource($"{resourceName}.resources");
@@ -3234,6 +3241,10 @@ namespace EternalModLoader
                         if (resourcePath != null)
                         {
                             isSoundMod = true;
+                        }
+                        else if (resourceName == "auto")
+                        {
+                            isAutoMod = true;
                         }
                         else
                         {
@@ -3333,78 +3344,83 @@ namespace EternalModLoader
                     {
                         lock (ResourceList)
                         {
-                            // Get the resource object
-                            var resource = ResourceList.FirstOrDefault(res => res.Name == resourceName);
-
-                            if (resource == null)
+                            string[] archiveList = isAutoMod ? ArchiveResolution.GetArchiveNames(modFileName) : new string[] { resourceName };
+                            // Should warn the user if archiveList is empty
+                            foreach (string currentArchive in archiveList)
                             {
-                                resource = new ResourceContainer(resourceName, PathToResource(resourceName + ".resources"));
-                                ResourceList.Add(resource);
-                            }
+                                // Get the resource object
+                                var resource = ResourceList.FirstOrDefault(res => res.Name == currentArchive);
 
-                            // Create the mod object and read the files
-                            ResourceModFile mod = new ResourceModFile(globalLooseMod, modFileName, resourceName);
-                            globalLooseMod.Files.Add(mod);
-
-                            if (!listResources)
-                            {
-                                using (var fileStream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read, BufferSize, FileOptions.SequentialScan))
+                                if (resource == null)
                                 {
-                                    mod.FileData = new MemoryStream((int)fileStream.Length);
-                                    fileStream.CopyTo(mod.FileData);
+                                    resource = new ResourceContainer(currentArchive, PathToResource(currentArchive + ".resources"));
+                                    ResourceList.Add(resource);
                                 }
-                            }
 
-                            // Read the JSON files in 'assetsinfo' under 'EternalMod'
-                            if (modFileName.EndsWith(".json", StringComparison.Ordinal))
-                            {
-                                if (modFileName.StartsWith($"EternalMod/assetsinfo/", StringComparison.Ordinal))
+                                // Create the mod object and read the files
+                                ResourceModFile mod = new ResourceModFile(globalLooseMod, modFileName, currentArchive);
+                                globalLooseMod.Files.Add(mod);
+
+                                if (!listResources)
                                 {
-                                    try
+                                    using (var fileStream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read, BufferSize, FileOptions.SequentialScan))
                                     {
-                                        // Read this JSON only if we are listing resources
-                                        if (listResources)
-                                        {
-                                            using (var fileStream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read, BufferSize, FileOptions.SequentialScan))
-                                            {
-                                                mod.FileData = new MemoryStream((int)fileStream.Length);
-                                                fileStream.CopyTo(mod.FileData);
-                                            }
-                                        }
-
-                                        mod.AssetsInfo = AssetsInfo.FromJson(Encoding.UTF8.GetString(mod.FileData.GetBuffer()));
-                                        mod.IsAssetsInfoJson = true;
-                                        mod.FileData = null;
+                                        mod.FileData = new MemoryStream((int)fileStream.Length);
+                                        fileStream.CopyTo(mod.FileData);
                                     }
-                                    catch
-                                    {
-                                        if (!listResources)
-                                        {
-                                            lock (fileLoadBufferedConsole)
-                                            {
-                                                fileLoadBufferedConsole.ForegroundColor = BufferedConsole.ForegroundColorCode.Red;
-                                                fileLoadBufferedConsole.Write("ERROR: ");
-                                                fileLoadBufferedConsole.ResetColor();
-                                                fileLoadBufferedConsole.WriteLine($"Failed to parse EternalMod/assetsinfo/{Path.GetFileNameWithoutExtension(mod.Name)}.json");
-                                            }
-                                        }
+                                }
 
+                                // Read the JSON files in 'assetsinfo' under 'EternalMod'
+                                if (modFileName.EndsWith(".json", StringComparison.Ordinal))
+                                {
+                                    if (modFileName.StartsWith($"EternalMod/assetsinfo/", StringComparison.Ordinal))
+                                    {
+                                        try
+                                        {
+                                            // Read this JSON only if we are listing resources
+                                            if (listResources)
+                                            {
+                                                using (var fileStream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read, BufferSize, FileOptions.SequentialScan))
+                                                {
+                                                    mod.FileData = new MemoryStream((int)fileStream.Length);
+                                                    fileStream.CopyTo(mod.FileData);
+                                                }
+                                            }
+
+                                            mod.AssetsInfo = AssetsInfo.FromJson(Encoding.UTF8.GetString(mod.FileData.GetBuffer()));
+                                            mod.IsAssetsInfoJson = true;
+                                            mod.FileData = null;
+                                        }
+                                        catch
+                                        {
+                                            if (!listResources)
+                                            {
+                                                lock (fileLoadBufferedConsole)
+                                                {
+                                                    fileLoadBufferedConsole.ForegroundColor = BufferedConsole.ForegroundColorCode.Red;
+                                                    fileLoadBufferedConsole.Write("ERROR: ");
+                                                    fileLoadBufferedConsole.ResetColor();
+                                                    fileLoadBufferedConsole.WriteLine($"Failed to parse EternalMod/assetsinfo/{Path.GetFileNameWithoutExtension(mod.Name)}.json");
+                                                }
+                                            }
+
+                                            return;
+                                        }
+                                    }
+                                    else if (modFileName.StartsWith($"EternalMod/strings/", StringComparison.Ordinal))
+                                    {
+                                        // Detect custom language files
+                                        mod.IsBlangJson = true;
+                                    }
+                                    else
+                                    {
                                         return;
                                     }
                                 }
-                                else if (modFileName.StartsWith($"EternalMod/strings/", StringComparison.Ordinal))
-                                {
-                                    // Detect custom language files
-                                    mod.IsBlangJson = true;
-                                }
-                                else
-                                {
-                                    return;
-                                }
-                            }
 
-                            resource.ModFileList.Add(mod);
-                            unzippedModCount++;
+                                resource.ModFileList.Add(mod);
+                                unzippedModCount++;
+                            }
                         }
                     }
                 });
@@ -3429,23 +3445,23 @@ namespace EternalModLoader
             looseStopwatch.Stop();
 
             // Check if the global loose mod is safe for online play
-            if (!OnlineSafety.IsModSafeForOnline(globalLooseMod))
-            {
-                AreModsSafeForOnline = false;
-                globalLooseMod.IsSafeForOnline = false;
+            //if (!OnlineSafety.IsModSafeForOnline(globalLooseMod))
+            //{
+            //    AreModsSafeForOnline = false;
+            //    globalLooseMod.IsSafeForOnline = false;
 
-                // Unload the mod files if necessary
-                if (LoadOnlineSafeOnlyMods)
-                {
-                    foreach (var resource in ResourceList)
-                    {
-                        foreach (ResourceModFile modFile in globalLooseMod.Files.Where(file => file is ResourceModFile))
-                        {
-                            resource.ModFileList.Remove(modFile);
-                        }
-                    }
-                }
-            }
+            //    // Unload the mod files if necessary
+            //    if (LoadOnlineSafeOnlyMods)
+            //    {
+            //        foreach (var resource in ResourceList)
+            //        {
+            //            foreach (ResourceModFile modFile in globalLooseMod.Files.Where(file => file is ResourceModFile))
+            //            {
+            //                resource.ModFileList.Remove(modFile);
+            //            }
+            //        }
+            //    }
+            //}
 
             if (unzippedModCount > 0 && !listResources)
             {
@@ -3469,12 +3485,12 @@ namespace EternalModLoader
                     BufferedConsole.ResetColor();
                     BufferedConsole.WriteLine("folder...");
 
-                    if (!globalLooseMod.IsSafeForOnline)
-                    {
-                        fileLoadBufferedConsole.ForegroundColor = BufferedConsole.ForegroundColorCode.Yellow;
-                        fileLoadBufferedConsole.WriteLine($"WARNING: Loose mod files are not safe for online play, public matchmaking will be disabled");
-                        fileLoadBufferedConsole.ResetColor();
-                    }
+                    //if (!globalLooseMod.IsSafeForOnline)
+                    //{
+                    //    fileLoadBufferedConsole.ForegroundColor = BufferedConsole.ForegroundColorCode.Yellow;
+                    //    fileLoadBufferedConsole.WriteLine($"WARNING: Loose mod files are not safe for online play, public matchmaking will be disabled");
+                    //    fileLoadBufferedConsole.ResetColor();
+                    //}
                 }
             }
 
@@ -3503,35 +3519,35 @@ namespace EternalModLoader
             }
 
             // Disable multiplayer if needed
-            if (!AreModsSafeForOnline && !LoadOnlineSafeOnlyMods)
-            {
-                // First, if any other mod is modifying the same files as the multiplayer disabler
-                // don't load those mod files at all
-                foreach (var resource in ResourceList)
-                {
-                    for (int i = resource.ModFileList.Count - 1; i >= 0; i--)
-                    {
-                        if (OnlineSafety.MultiplayerDisablerMod.Any(file => !file.IsBlangJson && !file.IsAssetsInfoJson && file.Name == resource.ModFileList[i].Name))
-                        {
-                            resource.ModFileList.RemoveAt(i);
-                        }
-                    }
-                }
+            //if (!AreModsSafeForOnline && !LoadOnlineSafeOnlyMods)
+            //{
+            //    // First, if any other mod is modifying the same files as the multiplayer disabler
+            //    // don't load those mod files at all
+            //    foreach (var resource in ResourceList)
+            //    {
+            //        for (int i = resource.ModFileList.Count - 1; i >= 0; i--)
+            //        {
+            //            if (OnlineSafety.MultiplayerDisablerMod.Any(file => !file.IsBlangJson && !file.IsAssetsInfoJson && file.Name == resource.ModFileList[i].Name))
+            //            {
+            //                resource.ModFileList.RemoveAt(i);
+            //            }
+            //        }
+            //    }
 
-                // Load in the multiplayer disabler mod files
-                foreach (ResourceModFile mod in OnlineSafety.MultiplayerDisablerMod)
-                {
-                    var resource = ResourceList.FirstOrDefault(res => res.Name == mod.ResourceName);
+            //    // Load in the multiplayer disabler mod files
+            //    foreach (ResourceModFile mod in OnlineSafety.MultiplayerDisablerMod)
+            //    {
+            //        var resource = ResourceList.FirstOrDefault(res => res.Name == mod.ResourceName);
 
-                    if (resource == null)
-                    {
-                        resource = new ResourceContainer(mod.ResourceName, PathToResource(mod.ResourceName + ".resources"));
-                        ResourceList.Add(resource);
-                    }
+            //        if (resource == null)
+            //        {
+            //            resource = new ResourceContainer(mod.ResourceName, PathToResource(mod.ResourceName + ".resources"));
+            //            ResourceList.Add(resource);
+            //        }
 
-                    resource.ModFileList.Add(mod);
-                }
-            }
+            //        resource.ModFileList.Add(mod);
+            //    }
+            //}
 
             // List the resources that will be modified
             if (listResources)

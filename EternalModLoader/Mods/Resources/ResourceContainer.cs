@@ -54,13 +54,14 @@ namespace EternalModLoader.Mods.Resources
 
         /// <summary>
         /// 0x74 (offset of 2nd IDCL)
+        /// Not in Dark Ages header - must find it manually
         /// </summary>
         public long IdclOffset;
 
         /// <summary>
         /// 0x24 (num of entries in section after NamesEnd)
         /// </summary>
-        public int UnknownCount;
+        public int DependencyCount;
 
         /// <summary>
         /// 0x2C (double the FileCount)

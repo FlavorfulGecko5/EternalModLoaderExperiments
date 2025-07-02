@@ -8,7 +8,7 @@
     <OutputType>Exe</OutputType>
     <RootNamespace>EternalModLoader</RootNamespace>
     <AssemblyName>DEternal_loadMods</AssemblyName>
-    <TargetFrameworkVersion>v4.5.2</TargetFrameworkVersion>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <Deterministic>true</Deterministic>
@@ -87,6 +87,7 @@
     <Reference Include="Microsoft.CSharp" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="ArchiveResolution.cs" />
     <Compile Include="BufferedConsole.cs" />
     <Compile Include="EternalModLoader.cs" />
     <Compile Include="FastBitConverter.cs" />
